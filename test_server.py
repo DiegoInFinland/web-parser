@@ -135,3 +135,36 @@ def test_raw_tool_does_not_reserialize_html(monkeypatch):
     assert run(server.fetch_suspicious_html("https://example.org"))["html"] == html
     result = run(server.mcp.call_tool("fetch_suspicious_html", {"url": "https://example.org"}))
     assert result.structured_content["html"] == html
+
+
+def test_fetch_html_extracts_title_and_main_text(monkeypatch):
+    async def fake_fetch(self):
+        return (
+            "<html><head><title>Example Page</title><script>head()</script></head>"
+            "<body><header>Menu</header><nav>Links</nav>"
+            "<main><h1>Heading</h1><p>Hello <strong>world</strong>.</p>"
+            "<aside>Sidebar</aside><small>Promotion</small>"
+            "<script>body()</script></main><footer>Legal</footer></body></html>"
+        )
+
+    monkeypatch.setattr(server.FetchURL, "fetch", fake_fetch)
+    result = run(server.fetch_html("https://example.org", tags=["small"]))
+
+    assert result["title"] == "Example Page"
+    assert result["content"] == "Heading\nHello world."
+    assert result["length"] == len(result["content"])
+
+
+def test_fetch_html_falls_back_to_body(monkeypatch):
+    async def fake_fetch(self):
+        return (
+            "<html><head><title>News</title></head><body><nav>Menu</nav>"
+            "<h1>Story</h1><p>First paragraph.</p><p>Second paragraph.</p>"
+            "</body></html>"
+        )
+
+    monkeypatch.setattr(server.FetchURL, "fetch", fake_fetch)
+    result = run(server.fetch_html("https://example.org"))
+
+    assert result["title"] == "News"
+    assert result["content"] == "Story\nFirst paragraph.\nSecond paragraph."

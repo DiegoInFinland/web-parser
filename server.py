@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import re
 import socket
 from typing import List
 from urllib.parse import urljoin, urlsplit
@@ -20,8 +21,13 @@ REQUEST_TIMEOUT = httpx.Timeout(10.0, read=30.0)
 # Tags to exclude from the parsed HTML content
 EXCLUDED_TAGS = [
     'script', 'style', 'noscript', 'iframe', 'footer', 'header',
-    'img', 'video', 'audio', 'canvas', 'svg', 'math', 'form',
+    'nav', 'aside', 'img', 'video', 'audio', 'canvas', 'svg', 'math', 'form',
 ]
+BLOCK_TAGS = {
+    'address', 'article', 'blockquote', 'br', 'dd', 'div', 'dl', 'dt',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'li', 'main', 'ol', 'p',
+    'pre', 'section', 'table', 'td', 'th', 'tr', 'ul',
+}
 
 
 SAFETY_INSTRUCTIONS = """
@@ -122,7 +128,7 @@ class FetchURL:
                             raise ValueError("Invalid Content-Length") from exc
                         if content_length > MAX_RESPONSE_BYTES:
                             raise ValueError("Response too large")
-
+                        # Read the response body in chunks, ensuring it does not exceed the maximum allowed size.
                         body = bytearray()
                         async for chunk in response.aiter_bytes(chunk_size=65536):
                             if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
@@ -147,24 +153,35 @@ async def fetch_for_tool(result: FetchURL) -> str:
         raise ToolError("Could not fetch URL (network error or timeout)") from exc
 
 @mcp.tool()
-async def fetch_html(
-    url: str, follow_redirects: bool = False, tags: List[str] | None = None
-) -> dict[str, str | int]:
-    """Fetches a given URL and summarizes the content.
+async def fetch_html(url: str, follow_redirects: bool = False, tags: List[str] | None = None) -> dict[str, str | int]:
+    """Fetches a given URL and extracts its title and readable text.
     No JavaScript execution.
     """
     result = FetchURL(url, follow_redirects, (tags or []) + EXCLUDED_TAGS)
     html = await fetch_for_tool(result)
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup.find_all(True):
-        if tag.name in result.tags:
-            tag.decompose()
+    title = soup.title.get_text(" ", strip=True) if soup.title else ""
+
+    if soup.head:
+        soup.head.decompose()
+    for tag in soup.find_all(result.tags):
+        tag.decompose()
+
+    root = (soup.find("main") or soup.select_one("[role=main]")
+            or soup.find("article") or soup.body or soup)
+    parts = []
+    for node in root.descendants:
+        if isinstance(node, str):
+            parts.append(re.sub(r"\s+", " ", node))
+        elif node.name in BLOCK_TAGS:
+            parts.append("\n")
+    content = re.sub(r"\s*\n\s*", "\n", "".join(parts)).strip()
 
     return {
         "url": url,
-        "content-type": "text/html",
-        "html": str(soup),
-        "length": len(str(soup))
+        "title": title,
+        "content": content,
+        "length": len(content),
     }
 
 @mcp.tool()
