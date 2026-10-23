@@ -1,0 +1,2 @@
+pytest
+mcp[cli]>=2,<3

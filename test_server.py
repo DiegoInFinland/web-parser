@@ -1,0 +1,137 @@
+import asyncio
+import socket
+
+import httpx
+import pytest
+
+import server
+
+
+def run(coroutine):
+    return asyncio.run(coroutine)
+
+
+@pytest.fixture
+def public_dns(monkeypatch):
+    async def getaddrinfo(self, host, port, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.215.14", port))]
+
+    monkeypatch.setattr(asyncio.BaseEventLoop, "getaddrinfo", getaddrinfo)
+
+
+def mock_client(monkeypatch, handler):
+    original_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+
+    def make_client(**kwargs):
+        return original_client(transport=transport, **kwargs)
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", make_client)
+
+
+def test_mcp_v2_registers_both_tools():
+    assert {tool.name for tool in run(server.mcp.list_tools())} == {
+        "fetch_html", "fetch_suspicious_html",
+    }
+
+
+def test_mcp_v2_reports_unsafe_url_as_tool_error():
+    from mcp import Client
+
+    async def call():
+        async with Client(server.mcp) as client:
+            return await client.call_tool("fetch_html", {"url": "http://127.0.0.1"})
+
+    result = run(call())
+    assert result.is_error
+    assert "non-public" in result.content[0].text
+
+
+def test_rejects_non_public_addresses_and_schemes():
+    for url in ("http://127.0.0.1", "http://[::1]", "http://10.0.0.1", "file:///etc/passwd"):
+        with pytest.raises(ValueError):
+            run(server.SafeURL(url).resolve())
+
+
+def test_rejects_mixed_dns_answers(monkeypatch):
+    async def mixed_dns(self, host, port, **kwargs):
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.215.14", port)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", port)),
+        ]
+
+    monkeypatch.setattr(asyncio.BaseEventLoop, "getaddrinfo", mixed_dns)
+    with pytest.raises(ValueError, match="non-public"):
+        run(server.SafeURL("https://example.org").resolve())
+
+
+def test_connects_to_validated_ip_with_original_host_and_sni(monkeypatch, public_dns):
+    def handler(request):
+        assert request.url.host == "93.184.215.14"
+        assert request.headers["host"] == "example.org"
+        assert request.extensions["sni_hostname"] == "example.org"
+        return httpx.Response(200, headers={"content-type": "text/html; charset=utf-8"}, text="<p>Hi</p>")
+
+    mock_client(monkeypatch, handler)
+    assert run(server.FetchURL("https://example.org", False, []).fetch()) == "<p>Hi</p>"
+
+
+def test_redirect_to_private_address_is_rejected(monkeypatch, public_dns):
+    mock_client(monkeypatch, lambda request: httpx.Response(
+        302, headers={"location": "http://127.0.0.1/admin"}
+    ))
+    with pytest.raises(ValueError, match="non-public"):
+        run(server.FetchURL("https://example.org", True, []).fetch())
+
+
+def test_follows_redirect_and_returns_html(monkeypatch, public_dns):
+    def handler(request):
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": "/destination"})
+        assert request.url.path == "/destination"
+        return httpx.Response(200, headers={"content-type": "text/html"}, text="<p>Done</p>")
+
+    mock_client(monkeypatch, handler)
+    assert run(server.FetchURL("https://example.org/start", True, []).fetch()) == "<p>Done</p>"
+
+
+def test_rejects_non_html(monkeypatch, public_dns):
+    mock_client(monkeypatch, lambda request: httpx.Response(
+        200, headers={"content-type": "application/pdf"}, content=b"not html"
+    ))
+    with pytest.raises(ValueError, match="not HTML"):
+        run(server.FetchURL("https://example.org", False, []).fetch())
+
+
+def test_rejects_declared_oversize_body(monkeypatch, public_dns):
+    mock_client(monkeypatch, lambda request: httpx.Response(200, headers={
+        "content-type": "text/html",
+        "content-length": str(server.MAX_RESPONSE_BYTES + 1),
+    }, content=b"short"))
+    with pytest.raises(ValueError, match="too large"):
+        run(server.FetchURL("https://example.org", False, []).fetch())
+
+
+def test_rejects_oversize_stream(monkeypatch, public_dns):
+    class BigStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for _ in range(server.MAX_RESPONSE_BYTES // 65536 + 1):
+                yield b"x" * 65536
+
+    mock_client(monkeypatch, lambda request: httpx.Response(
+        200, headers={"content-type": "text/html"}, stream=BigStream()
+    ))
+    with pytest.raises(ValueError, match="too large"):
+        run(server.FetchURL("https://example.org", False, []).fetch())
+
+
+def test_raw_tool_does_not_reserialize_html(monkeypatch):
+    html = '<!DOCTYPE html><HTML><BODY class="x">hi</BODY></HTML>'
+
+    async def fake_fetch(self):
+        return html
+
+    monkeypatch.setattr(server.FetchURL, "fetch", fake_fetch)
+    assert run(server.fetch_suspicious_html("https://example.org"))["html"] == html
+    result = run(server.mcp.call_tool("fetch_suspicious_html", {"url": "https://example.org"}))
+    assert result.structured_content["html"] == html
