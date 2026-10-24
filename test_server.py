@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 import server
-from core import client
+from core.client import FetchURL, SafeURL, MAX_RESPONSE_BYTES
 
 
 def run(coroutine):
@@ -27,7 +27,7 @@ def mock_client(monkeypatch, handler):
     def make_client(**kwargs):
         return original_client(transport=transport, **kwargs)
 
-    monkeypatch.setattr(client.httpx, "AsyncClient", make_client)
+    monkeypatch.setattr(server.httpx, "AsyncClient", make_client)
 
 
 def test_mcp_v2_registers_both_tools():
@@ -51,7 +51,7 @@ def test_mcp_v2_reports_unsafe_url_as_tool_error():
 def test_rejects_non_public_addresses_and_schemes():
     for url in ("http://127.0.0.1", "http://[::1]", "http://10.0.0.1", "file:///etc/passwd"):
         with pytest.raises(ValueError):
-            run(client.SafeURL(url).resolve())
+            run(SafeURL(url).resolve())
 
 
 def test_rejects_mixed_dns_answers(monkeypatch):
@@ -63,7 +63,7 @@ def test_rejects_mixed_dns_answers(monkeypatch):
 
     monkeypatch.setattr(asyncio.BaseEventLoop, "getaddrinfo", mixed_dns)
     with pytest.raises(ValueError, match="non-public"):
-        run(client.SafeURL("https://example.org").resolve())
+        run(SafeURL("https://example.org").resolve())
 
 
 def test_connects_to_validated_ip_with_original_host_and_sni(monkeypatch, public_dns):
@@ -74,7 +74,7 @@ def test_connects_to_validated_ip_with_original_host_and_sni(monkeypatch, public
         return httpx.Response(200, headers={"content-type": "text/html; charset=utf-8"}, text="<p>Hi</p>")
 
     mock_client(monkeypatch, handler)
-    assert run(client.FetchURL("https://example.org", False, []).fetch()) == (
+    assert run(FetchURL("https://example.org", False, []).fetch()) == (
         "https://example.org", "<p>Hi</p>"
     )
 
@@ -84,7 +84,7 @@ def test_redirect_to_private_address_is_rejected(monkeypatch, public_dns):
         302, headers={"location": "http://127.0.0.1/admin"}
     ))
     with pytest.raises(ValueError, match="non-public"):
-        run(client.FetchURL("https://example.org", True, []).fetch())
+        run(FetchURL("https://example.org", True, []).fetch())
 
 
 def test_follows_redirect_and_returns_html(monkeypatch, public_dns):
@@ -95,7 +95,7 @@ def test_follows_redirect_and_returns_html(monkeypatch, public_dns):
         return httpx.Response(200, headers={"content-type": "text/html"}, text="<p>Done</p>")
 
     mock_client(monkeypatch, handler)
-    assert run(client.FetchURL("https://example.org/start", True, []).fetch()) == (
+    assert run(FetchURL("https://example.org/start", True, []).fetch()) == (
         "https://example.org/destination", "<p>Done</p>"
     )
 
@@ -121,29 +121,29 @@ def test_rejects_non_html(monkeypatch, public_dns):
         200, headers={"content-type": "application/pdf"}, content=b"not html"
     ))
     with pytest.raises(ValueError, match="not HTML"):
-        run(client.FetchURL("https://example.org", False, []).fetch())
+        run(FetchURL("https://example.org", False, []).fetch())
 
 
 def test_rejects_declared_oversize_body(monkeypatch, public_dns):
     mock_client(monkeypatch, lambda request: httpx.Response(200, headers={
         "content-type": "text/html",
-        "content-length": str(client.MAX_RESPONSE_BYTES + 1),
+        "content-length": str(MAX_RESPONSE_BYTES + 1),
     }, content=b"short"))
     with pytest.raises(ValueError, match="too large"):
-        run(client.FetchURL("https://example.org", False, []).fetch())
+        run(FetchURL("https://example.org", False, []).fetch())
 
 
 def test_rejects_oversize_stream(monkeypatch, public_dns):
     class BigStream(httpx.AsyncByteStream):
         async def __aiter__(self):
-            for _ in range(client.MAX_RESPONSE_BYTES // 65536 + 1):
+            for _ in range(MAX_RESPONSE_BYTES // 65536 + 1):
                 yield b"x" * 65536
 
     mock_client(monkeypatch, lambda request: httpx.Response(
         200, headers={"content-type": "text/html"}, stream=BigStream()
     ))
     with pytest.raises(ValueError, match="too large"):
-        run(client.FetchURL("https://example.org", False, []).fetch())
+        run(FetchURL("https://example.org", False, []).fetch())
 
 
 def test_raw_tool_does_not_reserialize_html(monkeypatch):
@@ -152,7 +152,7 @@ def test_raw_tool_does_not_reserialize_html(monkeypatch):
     async def fake_fetch(self):
         return self.url, html
 
-    monkeypatch.setattr(client.FetchURL, "fetch", fake_fetch)
+    monkeypatch.setattr(FetchURL, "fetch", fake_fetch)
     assert run(server.fetch_suspicious_html("https://example.org"))["html"] == html
     result = run(server.mcp.call_tool("fetch_suspicious_html", {"url": "https://example.org"}))
     assert result.structured_content["html"] == html
@@ -168,7 +168,7 @@ def test_fetch_html_extracts_title_and_main_text(monkeypatch):
             "<script>body()</script></main><footer>Legal</footer></body></html>"
         )
 
-    monkeypatch.setattr(client.FetchURL, "fetch", fake_fetch)
+    monkeypatch.setattr(FetchURL, "fetch", fake_fetch)
     result = run(server.fetch_html("https://example.org", tags=["small"]))
 
     assert result["title"] == "Example Page"
@@ -180,7 +180,7 @@ def test_fetch_html_returns_links_through_mcp(monkeypatch):
     async def fake_fetch(self):
         return self.url, '<html><body><a href="/next">Next</a></body></html>'
 
-    monkeypatch.setattr(client.FetchURL, "fetch", fake_fetch)
+    monkeypatch.setattr(FetchURL, "fetch", fake_fetch)
     result = run(server.mcp.call_tool("fetch_html", {"url": "https://example.org"}))
 
     assert result.structured_content["links"] == ["https://example.org/next"]
@@ -195,7 +195,7 @@ def test_fetch_html_metadata_uses_final_url(monkeypatch):
             '<body><a href="next">Next</a></body></html>'
         )
 
-    monkeypatch.setattr(client.FetchURL, "fetch", fake_fetch)
+    monkeypatch.setattr(FetchURL, "fetch", fake_fetch)
     result = run(server.fetch_html("https://example.org/start", follow_redirects=True))
 
     assert result["url"] == "https://example.org/final/page"
@@ -214,7 +214,7 @@ def test_fetch_html_falls_back_to_body(monkeypatch):
             "</body></html>"
         )
 
-    monkeypatch.setattr(client.FetchURL, "fetch", fake_fetch)
+    monkeypatch.setattr(FetchURL, "fetch", fake_fetch)
     result = run(server.fetch_html("https://example.org"))
 
     assert result["title"] == "News"
