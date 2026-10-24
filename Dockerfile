@@ -14,6 +14,7 @@ FROM base AS development
 COPY requirements-dev.txt .
 RUN pip install --no-cache-dir -r requirements-dev.txt
 COPY server.py test_server.py ./
+COPY core/ ./core/
 USER app
 CMD ["python", "server.py"]
 
@@ -23,5 +24,6 @@ CMD ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_server.py"]
 # Keep production last so a plain `docker build .` builds this stage.
 FROM base AS production
 COPY server.py .
+COPY core/ ./core/
 USER app
 CMD ["python", "server.py"]
