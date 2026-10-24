@@ -73,7 +73,9 @@ def test_connects_to_validated_ip_with_original_host_and_sni(monkeypatch, public
         return httpx.Response(200, headers={"content-type": "text/html; charset=utf-8"}, text="<p>Hi</p>")
 
     mock_client(monkeypatch, handler)
-    assert run(server.FetchURL("https://example.org", False, []).fetch()) == "<p>Hi</p>"
+    assert run(server.FetchURL("https://example.org", False, []).fetch()) == (
+        "https://example.org", "<p>Hi</p>"
+    )
 
 
 def test_redirect_to_private_address_is_rejected(monkeypatch, public_dns):
@@ -92,7 +94,25 @@ def test_follows_redirect_and_returns_html(monkeypatch, public_dns):
         return httpx.Response(200, headers={"content-type": "text/html"}, text="<p>Done</p>")
 
     mock_client(monkeypatch, handler)
-    assert run(server.FetchURL("https://example.org/start", True, []).fetch()) == "<p>Done</p>"
+    assert run(server.FetchURL("https://example.org/start", True, []).fetch()) == (
+        "https://example.org/destination", "<p>Done</p>"
+    )
+
+
+@pytest.mark.parametrize("tool_name", ["fetch_html", "fetch_suspicious_html"])
+def test_tools_return_final_url_after_redirect(monkeypatch, public_dns, tool_name):
+    def handler(request):
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": "/destination"})
+        return httpx.Response(200, headers={"content-type": "text/html"}, text="<p>Done</p>")
+
+    mock_client(monkeypatch, handler)
+    result = run(server.mcp.call_tool(tool_name, {
+        "url": "https://example.org/start", "follow_redirects": True,
+    })).structured_content
+
+    assert result["url"] == "https://example.org/destination"
+    assert result["requested_url"] == "https://example.org/start"
 
 
 def test_rejects_non_html(monkeypatch, public_dns):
@@ -129,7 +149,7 @@ def test_raw_tool_does_not_reserialize_html(monkeypatch):
     html = '<!DOCTYPE html><HTML><BODY class="x">hi</BODY></HTML>'
 
     async def fake_fetch(self):
-        return html
+        return self.url, html
 
     monkeypatch.setattr(server.FetchURL, "fetch", fake_fetch)
     assert run(server.fetch_suspicious_html("https://example.org"))["html"] == html
@@ -139,7 +159,7 @@ def test_raw_tool_does_not_reserialize_html(monkeypatch):
 
 def test_fetch_html_extracts_title_and_main_text(monkeypatch):
     async def fake_fetch(self):
-        return (
+        return self.url, (
             "<html><head><title>Example Page</title><script>head()</script></head>"
             "<body><header>Menu</header><nav>Links</nav>"
             "<main><h1>Heading</h1><p>Hello <strong>world</strong>.</p>"
@@ -155,9 +175,39 @@ def test_fetch_html_extracts_title_and_main_text(monkeypatch):
     assert result["length"] == len(result["content"])
 
 
+def test_fetch_html_returns_links_through_mcp(monkeypatch):
+    async def fake_fetch(self):
+        return self.url, '<html><body><a href="/next">Next</a></body></html>'
+
+    monkeypatch.setattr(server.FetchURL, "fetch", fake_fetch)
+    result = run(server.mcp.call_tool("fetch_html", {"url": "https://example.org"}))
+
+    assert result.structured_content["links"] == ["https://example.org/next"]
+
+
+def test_fetch_html_metadata_uses_final_url(monkeypatch):
+    async def fake_fetch(self):
+        return "https://example.org/final/page", (
+            '<html><head><title>Final</title><meta name="description" content="Summary">'
+            '<meta property="og:title" content="Shared title">'
+            '<link rel="canonical" href="../canonical"></head>'
+            '<body><a href="next">Next</a></body></html>'
+        )
+
+    monkeypatch.setattr(server.FetchURL, "fetch", fake_fetch)
+    result = run(server.fetch_html("https://example.org/start", follow_redirects=True))
+
+    assert result["url"] == "https://example.org/final/page"
+    assert result["requested_url"] == "https://example.org/start"
+    assert result["links"] == ["https://example.org/final/next"]
+    assert result["canonical"] == "https://example.org/canonical"
+    assert result["description"] == "Summary"
+    assert result["og:title"] == "Shared title"
+
+
 def test_fetch_html_falls_back_to_body(monkeypatch):
     async def fake_fetch(self):
-        return (
+        return self.url, (
             "<html><head><title>News</title></head><body><nav>Menu</nav>"
             "<h1>Story</h1><p>First paragraph.</p><p>Second paragraph.</p>"
             "</body></html>"

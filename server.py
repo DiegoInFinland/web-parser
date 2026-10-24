@@ -15,14 +15,17 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/91.0.4472.124 Safari/537.36"
 )
+
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # 10 MB
 MAX_REDIRECTS = 5
 REQUEST_TIMEOUT = httpx.Timeout(10.0, read=30.0)
+
 # Tags to exclude from the parsed HTML content
 EXCLUDED_TAGS = [
     'script', 'style', 'noscript', 'iframe', 'footer', 'header',
     'nav', 'aside', 'img', 'video', 'audio', 'canvas', 'svg', 'math', 'form',
 ]
+
 BLOCK_TAGS = {
     'address', 'article', 'blockquote', 'br', 'dd', 'div', 'dl', 'dt',
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'li', 'main', 'ol', 'p',
@@ -37,10 +40,8 @@ SAFETY_INSTRUCTIONS = """
 4. Always use a timeout for HTTP requests to prevent hanging.
 5. Handle exceptions gracefully and return informative error messages.
 """
-
 mcp = MCPServer("web-parser", instructions=SAFETY_INSTRUCTIONS)
 
-# Class responsible for checking if the response has an HTML content type
 class IsHtmlContentType:
     def __init__(self, response: httpx.Response):
         self.response = response
@@ -52,7 +53,6 @@ class IsHtmlContentType:
         if content_type not in allowed_content_types:
             raise ValueError("Response is not HTML")
 
-# Class responsible for validating URLs against safety rules
 class SafeURL:
     def __init__(self, url: str):
         self.url = url
@@ -88,7 +88,6 @@ class SafeURL:
         # for HTTP routing and HTTPS certificate verification.
         return original_url.copy_with(host=str(addresses[0])), parsed.netloc, hostname
 
-# Class responsible for safely fetching URLs while adhering to safety rules
 class FetchURL:
     def __init__(self, url: str, follow_redirects: bool, tags: List[str]):
         self.url = url
@@ -96,7 +95,7 @@ class FetchURL:
         self.tags = tags or []
         self.safe_url = SafeURL(url)
 
-    async def fetch(self) -> str:
+    async def fetch(self) -> tuple[str, str]:
         current_url = self.url
         async with asyncio.timeout(45):
             async with httpx.AsyncClient(
@@ -135,32 +134,63 @@ class FetchURL:
                                 raise ValueError("Response too large")
                             body.extend(chunk)
                         try:
-                            return body.decode(response.encoding or "utf-8", errors="replace")
+                            return current_url, body.decode(response.encoding or "utf-8", errors="replace")
                         except LookupError:
-                            return body.decode("utf-8", errors="replace")
+                            return current_url, body.decode("utf-8", errors="replace")
         raise ValueError("Too many redirects")
 
 
-async def fetch_for_tool(result: FetchURL) -> str:
-    """Turn expected fetch failures into informative MCP v2 tool errors."""
+async def fetch_for_tool(result: FetchURL) -> tuple[str, str]:
+    """Turn expected fetch failures into informative MCP v2 tool errors. """
     try:
         return await result.fetch()
-    except ValueError as exc:
-        raise ToolError(str(exc)) from exc
-    except httpx.HTTPStatusError as exc:
-        raise ToolError(f"HTTP {exc.response.status_code} from remote server") from exc
-    except (httpx.RequestError, TimeoutError) as exc:
-        raise ToolError("Could not fetch URL (network error or timeout)") from exc
+    except ValueError as error_output:
+        raise ToolError(str(error_output)) from error_output
+    except httpx.HTTPStatusError as error_status_code:
+        raise ToolError(f"HTTP {error_status_code.response.status_code} from remote server") from error_status_code
+    except (httpx.RequestError, TimeoutError) as error_network:
+        raise ToolError("Could not fetch URL (network error or timeout)") from error_network
 
-@mcp.tool()
-async def fetch_html(url: str, follow_redirects: bool = False, tags: List[str] | None = None) -> dict[str, str | int]:
-    """Fetches a given URL and extracts its title and readable text.
-    No JavaScript execution.
-    """
-    result = FetchURL(url, follow_redirects, (tags or []) + EXCLUDED_TAGS)
-    html = await fetch_for_tool(result)
+async def extract_metadata(html: str, url: str) -> dict[str, str | list[str]]:
+    """ Extract metadata from the given HTML content. """
     soup = BeautifulSoup(html, "html.parser")
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
+    meta_tags = ["description", "keywords", "author", "og:title", "og:description", "og:image", "og:url"]
+
+    metadata = {}
+    for name in meta_tags:
+        tag = soup.find("meta", attrs={"name": name}) or soup.find("meta", attrs={"property": name})
+        if tag and tag.get("content"):
+            metadata[name] = tag["content"]
+
+    canonical_tag = soup.find("link", rel="canonical")
+    canonical_href = urljoin(url, canonical_tag["href"]) if canonical_tag and canonical_tag.get("href") else ""
+
+    links = []
+    for anchor in soup.find_all("a", href=True):
+        href = anchor.get("href", "").strip()
+        if href:
+            links.append(urljoin(url, href))
+
+    return {
+        "url": url,
+        "title": title,
+        "canonical": canonical_href,
+        "links": links,
+        **metadata,
+    }
+
+@mcp.tool()
+async def fetch_html(url: str, follow_redirects: bool = False, tags: List[str] | None = None) -> dict[str, str | int | list[str]]:
+    """Fetches a given URL and extracts its  HTML content. No JavaScript execution.
+    Returns a dictionary containing the final URL, requested URL, title, content, content length, and links.
+    """
+    result = FetchURL(url, follow_redirects, (tags or []) + EXCLUDED_TAGS)
+    # final_url is the URL after any redirects, and html is the fetched HTML content.
+    final_url, html = await fetch_for_tool(result)
+    soup = BeautifulSoup(html, "html.parser")
+
+    site_metadata = await extract_metadata(html, final_url)
 
     if soup.head:
         soup.head.decompose()
@@ -169,6 +199,7 @@ async def fetch_html(url: str, follow_redirects: bool = False, tags: List[str] |
 
     root = (soup.find("main") or soup.select_one("[role=main]")
             or soup.find("article") or soup.body or soup)
+
     parts = []
     for node in root.descendants:
         if isinstance(node, str):
@@ -178,23 +209,29 @@ async def fetch_html(url: str, follow_redirects: bool = False, tags: List[str] |
     content = re.sub(r"\s*\n\s*", "\n", "".join(parts)).strip()
 
     return {
-        "url": url,
-        "title": title,
+        "url": final_url,
+        "requested_url": url,
+        "title": site_metadata["title"],
         "content": content,
         "length": len(content),
+        "links": site_metadata["links"],
+        "canonical": site_metadata["canonical"],
+        # Additional metadata extracted from the HTML content.
+        **{name: value for name, value in site_metadata.items()
+           if name not in ("url", "title", "links", "canonical")},
     }
 
 @mcp.tool()
 async def fetch_suspicious_html(
-    url: str, follow_redirects: bool = False, tags: List[str] | None = None
-) -> dict[str, str | int]:
-    """Fetches a given URL and returns decoded HTML without parsing it.
-    No JavaScript execution. The tags argument is ignored for this tool.
+    url: str, follow_redirects: bool = False, tags: List[str] | None = None) -> dict[str, str | int | list[str]]:
+    """Fetches a given URL and returns decoded HTML without parsing it. No JavaScript execution.
+    It returns raw HTML. No parsing is performed. The tags argument is ignored for this tool.
     """
     result = FetchURL(url, follow_redirects, [])
-    html = await fetch_for_tool(result)
+    final_url, html = await fetch_for_tool(result)
     return {
-        "url": url,
+        "url": final_url,
+        "requested_url": url,
         "content-type": "text/html",
         "html": html,
         "length": len(html)

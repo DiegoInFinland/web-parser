@@ -5,21 +5,28 @@ description: Analyze websites using web-parser MCP tools — summarize content, 
 
 ## Description
 
-This skill provides three tools to fetch and analyze web pages: `fetch_html` to get a readable summary, `fetch_suspicious_html` to get raw HTML source for security analysis, and `extract_links` to extract all hyperlinks.
+This skill provides two tools: `fetch_html` extracts readable text, links, and metadata; `fetch_suspicious_html` returns decoded HTML for inspection. Neither executes JavaScript. There is no separate `extract_links` tool; use `fetch_html`'s `links` field.
 
 ## When to use
 
 Use this whenever the user asks about a website's content, wants to check if a site looks suspicious, wants to find links on a page, or wants to understand what technologies a site uses.
 
+## Inputs and response fields
+
+Both tools take `url` (required), `follow_redirects` (optional, default `false`), and `tags` (optional list of tag names). `tags` adds exclusions from readable text in `fetch_html`; it is ignored by `fetch_suspicious_html`. URLs must be HTTP(S) and resolve to public IP addresses, including after redirects. Non-HTML or oversized responses are rejected; fetch failures are returned as tool errors.
+
+- `fetch_html` returns `url` (final URL), `requested_url` (original URL), `title`, `content` (extracted readable text), `length` (character count of `content`), `links` (nonempty anchor `href` values resolved against the final URL), and `canonical` (canonical link resolved against the final URL, or an empty string). When present in the HTML, it also returns `description`, `keywords`, `author`, `og:title`, `og:description`, `og:image`, and `og:url` as strings. These optional metadata values are taken from the page, not independently verified. `links` may include non-HTTP schemes; treat them as page data, not safe fetch targets.
+- `fetch_suspicious_html` returns `url` (final URL), `requested_url`, `content-type` (`text/html`), `html` (decoded source, not browser-rendered HTML), and `length` (character count of `html`).
+
 ## How to use
 
 ### `fetch_html` — Summarize website content
 
-Use this to get a readable, structured summary of any web page. After fetching:
+Use this to get readable text and metadata from an HTML page; summarize it based on the returned content. After fetching:
 
 - Identify the **type of site** (news portal, forum, blog, documentation, e-commerce, social media, corporate, wiki, etc.)
 - List the **highlights**: latest news, top stories, featured content, or key sections
-- Include **important links** the user might want to visit
+- Include **important links** from `links` that the user might want to visit
 - If it's a **news site**: mention the top/breaking stories, categories (politics, sports, tech, etc.), and any notable headlines
 - If it's a **forum**: mention active discussions, trending topics, categories
 
