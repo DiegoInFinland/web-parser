@@ -1,6 +1,6 @@
 # web-parser
 
-A lightweight MCP server that helps AI agents inspect public web pages. Use it to check if a website is reachable, returns HTML and JavaScript and review it. Extracts links and metadata. It can inspect suspicious JavaScript code and
+A lightweight MCP server that helps AI agents inspect public web pages. It fetches HTML, extracts page text, links, and metadata, and lets agents review the raw HTML for suspicious patterns, including embedded JavaScript. It does not execute JavaScript or fetch external script files.
 
 ## Setup
 
@@ -30,7 +30,7 @@ Restart your AI client to load the MCP server. Configuration paths and formats m
 3. If something looks unexpected, have it fetch the same page with fetch_suspicious_html and inspect the static HTML for unfamiliar script sources, obfuscation, or redirect-related code.
 4. Ask for a report that separates confirmed observations from patterns that need human review.
 
-Example request: *“Check https://myblog.example/about, following redirects. Report the requested and final URLs, whether it returned HTML, and whether the title and content look expected. Then inspect up to five same-domain links, following redirects for each. Don’t execute JavaScript; flag suspicious source patterns with evidence.”*
+Example request: _“Check https://myblog.example/about, following redirects. Report the requested and final URLs, whether it returned HTML, and whether the title and content look expected. Then inspect up to five same-domain links, following redirects for each. Don’t execute JavaScript; flag suspicious source patterns with evidence.”_
 
 ## Limitations
 
