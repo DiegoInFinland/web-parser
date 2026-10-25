@@ -25,9 +25,9 @@ Restart your AI client to load the MCP server. Configuration paths and formats m
 
 ## Example workflow
 
-1. Ask the agent to fetch the page with fetch_html, following redirects if needed. It checks that the URL returns an HTML response and provides the page’s text, title, metadata, and links.
+1. Ask the agent to fetch a web page, following redirects if needed. It checks that the URL returns an HTML response and provides the page’s text, title, metadata, and links.
 2. Have the agent compare those results with what you expect—for example, the correct page title, latest post, canonical URL, and navigation links.
-3. If something looks unexpected, have it fetch the same page with fetch_suspicious_html and inspect the static HTML for unfamiliar script sources, obfuscation, or redirect-related code.
+3. If something looks unexpected or suspicious, have it fetch the same page and ask to inspect the static HTML/JavaScript code for unfamiliar script sources, obfuscation, or redirect-related code.
 4. Ask for a report that separates confirmed observations from patterns that need human review.
 
 Example request: _“Check https://myblog.example/about, following redirects. Report the requested and final URLs, whether it returned HTML, and whether the title and content look expected. Then inspect up to five same-domain links, following redirects for each. Don’t execute JavaScript; flag suspicious source patterns with evidence.”_
