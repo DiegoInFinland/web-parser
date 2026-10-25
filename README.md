@@ -1,8 +1,42 @@
 # web-parser
 
-A lightweight MCP server built with Python to allow AI agents to fetch and inspect web pages.
+A lightweight MCP server that helps AI agents inspect public web pages. Use it to check if a website is reachable, returns HTML and JavaScript and review it. Extracts links and metadata. It can inspect suspicious JavaScript code and
 
-## Docker targets
+## Setup
+
+```sh
+docker build -t web-parser .
+```
+
+Add the following configuration to your AI client, for example:
+
+```json
+{
+  "mcpServers": {
+    "web-parser": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "web-parser"]
+    }
+  }
+}
+```
+
+Restart your AI client to load the MCP server. Configuration paths and formats may vary depending on the client.
+
+## Example workflow
+
+1. Ask the agent to fetch the page with fetch_html, following redirects if needed. It checks that the URL returns an HTML response and provides the page’s text, title, metadata, and links.
+2. Have the agent compare those results with what you expect—for example, the correct page title, latest post, canonical URL, and navigation links.
+3. If something looks unexpected, have it fetch the same page with fetch_suspicious_html and inspect the static HTML for unfamiliar script sources, obfuscation, or redirect-related code.
+4. Ask for a report that separates confirmed observations from patterns that need human review.
+
+Example request: *“Check https://myblog.example/about, following redirects. Report the requested and final URLs, whether it returned HTML, and whether the title and content look expected. Then inspect up to five same-domain links, following redirects for each. Don’t execute JavaScript; flag suspicious source patterns with evidence.”*
+
+## Limitations
+
+The server does not run JavaScript code. So it cannot verify or confirm that a page works in a browser.
+
+## Development and tests
 
 The default build is production: it contains only the server and runtime dependencies, and runs as an unprivileged user.
 
@@ -25,24 +59,3 @@ The test target runs the suite by default (no external network is needed):
 docker build --target test -t web-parser:test .
 docker run --rm --network none web-parser:test
 ```
-
-## Setup
-
-```sh
-docker build -t web-parser .
-```
-
-Add the following configuration to your AI client, for example:
-
-```json
-{
-  "mcpServers": {
-    "web-parser": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i", "web-parser"]
-    }
-  }
-}
-```
-
-Restart your AI client to load the MCP server. Configuration paths and formats may vary depending on the client.

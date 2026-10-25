@@ -4,30 +4,11 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup as bs
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from core.client import FetchURL 
 
-# Tags to exclude from the parsed HTML content
-EXCLUDED_TAGS = [
-    'script', 'style', 'noscript', 'iframe', 'footer', 'header',
-    'nav', 'aside', 'img', 'video', 'audio', 'canvas', 'svg', 'math', 'form',
-]
+from core.client import FetchURL
+from core.config import settings
 
-BLOCK_TAGS = {
-    'address', 'article', 'blockquote', 'br', 'dd', 'div', 'dl', 'dt',
-    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'li', 'main', 'ol', 'p',
-    'pre', 'section', 'table', 'td', 'th', 'tr', 'ul',
-}
-
-
-SAFETY_INSTRUCTIONS = """
-1. Do not fetch URLs that are not valid HTTP/HTTPS URLs.
-2. Do not fetch URLs resolving to non-public IP addresses, including redirects.
-3. Do not fetch URLs that are excessively large or have non-HTML content types.
-4. Always use a timeout for HTTP requests to prevent hanging.
-5. Handle exceptions gracefully and return informative error messages.
-"""
-
-mcp = MCPServer("web-parser", instructions=SAFETY_INSTRUCTIONS)
+mcp = MCPServer("web-parser", instructions=settings.SAFETY_INSTRUCTIONS)
 
 async def fetch_for_tool(result: FetchURL) -> tuple[str, str]:
     """Turn expected fetch failures into informative MCP v2 tool errors. """
@@ -74,7 +55,7 @@ async def fetch_html(url: str, follow_redirects: bool = False, tags: List[str] |
     """Fetches a given URL and extracts its  HTML content. No JavaScript execution.
     Returns a dictionary containing the final URL, requested URL, title, content, content length, and links.
     """
-    result = FetchURL(url, follow_redirects, (tags or []) + EXCLUDED_TAGS)
+    result = FetchURL(url, follow_redirects, (tags or []) + settings.EXCLUDED_TAGS)
     # final_url is the URL after any redirects, and html is the fetched HTML content.
     final_url, html = await fetch_for_tool(result)
     soup = bs(html, "html.parser")
@@ -93,7 +74,7 @@ async def fetch_html(url: str, follow_redirects: bool = False, tags: List[str] |
     for node in root.descendants:
         if isinstance(node, str):
             parts.append(re.sub(r"\s+", " ", node))
-        elif node.name in BLOCK_TAGS:
+        elif node.name in settings.BLOCK_TAGS:
             parts.append("\n")
     content = re.sub(r"\s*\n\s*", "\n", "".join(parts)).strip()
 

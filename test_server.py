@@ -5,7 +5,8 @@ import httpx
 import pytest
 
 import server
-from core.client import FetchURL, SafeURL, MAX_RESPONSE_BYTES
+from core.client import FetchURL, SafeURL
+from core.config import settings
 
 
 def run(coroutine):
@@ -127,7 +128,7 @@ def test_rejects_non_html(monkeypatch, public_dns):
 def test_rejects_declared_oversize_body(monkeypatch, public_dns):
     mock_client(monkeypatch, lambda request: httpx.Response(200, headers={
         "content-type": "text/html",
-        "content-length": str(MAX_RESPONSE_BYTES + 1),
+        "content-length": str(settings.MAX_RESPONSE_BYTES + 1),
     }, content=b"short"))
     with pytest.raises(ValueError, match="too large"):
         run(FetchURL("https://example.org", False, []).fetch())
@@ -136,12 +137,22 @@ def test_rejects_declared_oversize_body(monkeypatch, public_dns):
 def test_rejects_oversize_stream(monkeypatch, public_dns):
     class BigStream(httpx.AsyncByteStream):
         async def __aiter__(self):
-            for _ in range(MAX_RESPONSE_BYTES // 65536 + 1):
+            for _ in range(settings.MAX_RESPONSE_BYTES // 65536 + 1):
                 yield b"x" * 65536
 
     mock_client(monkeypatch, lambda request: httpx.Response(
         200, headers={"content-type": "text/html"}, stream=BigStream()
     ))
+    with pytest.raises(ValueError, match="too large"):
+        run(FetchURL("https://example.org", False, []).fetch())
+
+
+def test_response_limit_uses_settings(monkeypatch, public_dns):
+    monkeypatch.setattr(settings, "MAX_RESPONSE_BYTES", 4)
+    mock_client(monkeypatch, lambda request: httpx.Response(
+        200, headers={"content-type": "text/html"}, content=b"12345"
+    ))
+
     with pytest.raises(ValueError, match="too large"):
         run(FetchURL("https://example.org", False, []).fetch())
 

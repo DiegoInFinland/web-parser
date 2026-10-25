@@ -5,15 +5,7 @@ import ipaddress
 import socket
 from urllib.parse import urlsplit, urljoin
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/91.0.4472.124 Safari/537.36"
-)
-
-MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # 10 MB
-MAX_REDIRECTS = 5
-REQUEST_TIMEOUT = httpx.Timeout(10.0, read=30.0)
+from core.config import settings
 
 class IsHtmlContentType:
     def __init__(self, response: httpx.Response):
@@ -70,12 +62,12 @@ class FetchURL:
 
     async def fetch(self) -> tuple[str, str]:
         current_url = self.url
-        async with asyncio.timeout(45):
+        async with asyncio.timeout(settings.TOTAL_TIMEOUT):
             async with httpx.AsyncClient(
-                follow_redirects=False, trust_env=False, timeout=REQUEST_TIMEOUT,
-                headers={"User-Agent": USER_AGENT},
+                follow_redirects=False, trust_env=False, timeout=settings.REQUEST_TIMEOUT,
+                headers={"User-Agent": settings.USER_AGENT},
             ) as client:
-                for hop in range(MAX_REDIRECTS + 1):
+                for hop in range(settings.MAX_REDIRECTS + 1):
                     self.safe_url = SafeURL(current_url)
                     target, host_header, hostname = await self.safe_url.resolve()
                     async with client.stream(
@@ -87,7 +79,7 @@ class FetchURL:
                             location = response.headers.get("location")
                             if not location:
                                 raise ValueError("Redirect has no Location header")
-                            if hop == MAX_REDIRECTS:
+                            if hop == settings.MAX_REDIRECTS:
                                 raise ValueError("Too many redirects")
                             current_url = urljoin(current_url, location)
                             continue
@@ -98,12 +90,12 @@ class FetchURL:
                             content_length = int(response.headers.get("content-length", "0"))
                         except ValueError as exc:
                             raise ValueError("Invalid Content-Length") from exc
-                        if content_length > MAX_RESPONSE_BYTES:
+                        if content_length > settings.MAX_RESPONSE_BYTES:
                             raise ValueError("Response too large")
                         # Read the response body in chunks, ensuring it does not exceed the maximum allowed size.
                         body = bytearray()
                         async for chunk in response.aiter_bytes(chunk_size=65536):
-                            if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+                            if len(body) + len(chunk) > settings.MAX_RESPONSE_BYTES:
                                 raise ValueError("Response too large")
                             body.extend(chunk)
                         try:
