@@ -1,11 +1,15 @@
 import httpx
 import asyncio
+import random
 from typing import List
 import ipaddress
 import socket
 from urllib.parse import urlsplit, urljoin
 
 from core.config import settings
+
+def random_user_agent() -> str:
+    return random.choice(settings.USER_AGENT)
 
 class IsHtmlContentType:
     def __init__(self, response: httpx.Response):
@@ -65,7 +69,7 @@ class FetchURL:
         async with asyncio.timeout(settings.TOTAL_TIMEOUT):
             async with httpx.AsyncClient(
                 follow_redirects=False, trust_env=False, timeout=settings.REQUEST_TIMEOUT,
-                headers={"User-Agent": settings.USER_AGENT},
+                headers={"User-Agent": random_user_agent()},
             ) as client:
                 for hop in range(settings.MAX_REDIRECTS + 1):
                     self.safe_url = SafeURL(current_url)

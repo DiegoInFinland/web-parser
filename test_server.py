@@ -80,6 +80,18 @@ def test_connects_to_validated_ip_with_original_host_and_sni(monkeypatch, public
     )
 
 
+def test_fetch_uses_selected_user_agent(monkeypatch, public_dns):
+    selected = settings.USER_AGENT[0]
+    monkeypatch.setattr("core.client.random.choice", lambda agents: selected)
+
+    def handler(request):
+        assert request.headers["user-agent"] == selected
+        return httpx.Response(200, headers={"content-type": "text/html"}, text="<p>Hi</p>")
+
+    mock_client(monkeypatch, handler)
+    run(FetchURL("https://example.org", False, []).fetch())
+
+
 def test_redirect_to_private_address_is_rejected(monkeypatch, public_dns):
     mock_client(monkeypatch, lambda request: httpx.Response(
         302, headers={"location": "http://127.0.0.1/admin"}
